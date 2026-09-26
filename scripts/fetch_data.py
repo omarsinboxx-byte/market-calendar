@@ -4,7 +4,7 @@
 Standard library only — no pip installs. Run locally with:  python scripts/fetch_data.py
 
 Sources (no API key needed):
-  - Economic calendar: Forex Factory weekly JSON feed (this week + next week)
+  - Economic calendar: Forex Factory (current week) + Nasdaq (next 3 weeks)
   - Earnings + call timing (before open / after close): Nasdaq public calendar API
   - Stock splits: Nasdaq public calendar API
   - Upcoming IPOs: Nasdaq public calendar API
@@ -13,7 +13,9 @@ Optional fallback for earnings: Finnhub (set FINNHUB_API_KEY as a repo secret).
 If a source fails, the previous data for that section is kept and marked stale,
 so one flaky endpoint never blanks the dashboard.
 """
+import html
 import json
+import re
 import os
 import sys
 import time
@@ -99,14 +101,49 @@ def weekdays(start, n_days):
 
 
 # ---------------------------------------------------------------- economic
-def fetch_economic():
+# Two sources: Forex Factory (current week, real impact ratings, reliable times)
+# and Nasdaq (any date, so it covers the weeks Forex Factory hasn't published).
+# Forex Factory wins wherever both cover the same days.
+
+COUNTRY_CCY = {
+    "united states": "USD", "us": "USD", "usa": "USD",
+    "euro zone": "EUR", "eurozone": "EUR", "euro area": "EUR", "european union": "EUR",
+    "germany": "EUR", "france": "EUR", "italy": "EUR", "spain": "EUR",
+    "united kingdom": "GBP", "uk": "GBP", "japan": "JPY", "canada": "CAD",
+    "australia": "AUD", "new zealand": "NZD", "switzerland": "CHF", "china": "CNY",
+}
+HIGH_KW = ["nonfarm", "non-farm", "unemployment rate", "cpi", "consumer price index",
+           "pce", "interest rate decision", "fomc", "fed funds", "federal funds", "gdp",
+           "retail sales", "ism manufacturing", "ism non-manufacturing", "ism services",
+           "jolts", "average hourly earnings", "ppi", "producer price", "jobless claims",
+           "powell", "employment change", "monetary policy statement", "rate statement"]
+MED_KW = ["pmi", "consumer confidence", "consumer sentiment", "michigan", "durable goods",
+          "housing starts", "building permits", "existing home", "new home", "pending home",
+          "trade balance", "industrial production", "adp", "factory orders", "crude oil",
+          "empire state", "philadelphia fed", "philly fed", "personal income",
+          "personal spending", "beige book", "minutes", "business confidence", "zew", "ifo"]
+
+
+def classify_impact(title):
+    t = title.lower()
+    if any(k in t for k in HIGH_KW):
+        return "High"
+    if any(k in t for k in MED_KW):
+        return "Medium"
+    return "Low"
+
+
+def norm_title(t):
+    return "".join(ch for ch in t.lower() if ch.isalnum())
+
+
+def fetch_ff():
     events, got_first = [], False
     for i, url in enumerate(FF_URLS):
         try:
             rows = get_json(url)
         except urllib.error.HTTPError as e:
-            if i > 0 and e.code == 404:  # next week's file isn't published yet
-                log("  next-week economic feed not published yet")
+            if i > 0 and e.code == 404:
                 continue
             raise
         if i == 0:
@@ -117,9 +154,8 @@ def fetch_economic():
             except (KeyError, TypeError, ValueError):
                 continue
             events.append({
-                "type": "econ",
-                "ts": dt.isoformat(),
-                "date": dt.date().isoformat(),
+                "type": "econ", "src": "Forex Factory",
+                "ts": dt.isoformat(), "date": dt.date().isoformat(),
                 "title": (r.get("title") or "").strip(),
                 "country": (r.get("country") or "").strip(),
                 "impact": (r.get("impact") or "").strip(),
@@ -128,14 +164,130 @@ def fetch_economic():
             })
         time.sleep(3)  # the feed asks for polite polling
     if not got_first:
-        raise RuntimeError("economic feed returned nothing")
+        raise RuntimeError("Forex Factory feed returned nothing")
+    return events
+
+
+def parse_clock(s):
+    m = re.search(r"(\d{1,2}):(\d{2})\s*([AaPp][Mm])?", s or "")
+    if not m:
+        return None
+    h, mi, ap = int(m.group(1)), int(m.group(2)), (m.group(3) or "").lower()
+    if ap == "pm" and h < 12:
+        h += 12
+    if ap == "am" and h == 12:
+        h = 0
+    return h, mi
+
+
+def fetch_nasdaq_econ(start, n_days):
+    out, days, failures = [], 0, 0
+    for d in weekdays(start, n_days):
+        days += 1
+        try:
+            j = get_json(f"https://api.nasdaq.com/api/calendar/economicevents?date={d.isoformat()}",
+                         headers=NASDAQ_HEADERS)
+        except Exception as e:
+            failures += 1
+            log(f"  nasdaq econ {d}: {e}")
+            continue
+        for r in ((j or {}).get("data") or {}).get("rows") or []:
+            title = html.unescape((r.get("eventName") or "").strip())
+            if not title:
+                continue
+            country = html.unescape((r.get("country") or "").strip())
+            clock = parse_clock(r.get("gmt") or r.get("time") or "")
+            utc = (datetime(d.year, d.month, d.day, clock[0], clock[1], tzinfo=timezone.utc)
+                   if clock else None)
+            out.append({
+                "type": "econ", "src": "Nasdaq", "_utc": utc, "_day": d,
+                "title": title,
+                "country": COUNTRY_CCY.get(country.lower(), country),
+                "impact": classify_impact(title),
+                "forecast": html.unescape((r.get("consensus") or "").strip()),
+                "previous": html.unescape((r.get("previous") or "").strip()),
+            })
+        time.sleep(1)
+    if days and failures == days:
+        raise RuntimeError("Nasdaq economic endpoint unreachable for every day")
+    return out
+
+
+def finish_nasdaq(rows, offset_min):
+    """Apply the time-zone correction and give each row a final ts/date."""
+    for e in rows:
+        utc, d = e.pop("_utc"), e.pop("_day")
+        if utc is None:
+            e["ts"], e["date"] = None, d.isoformat()
+        else:
+            dt = (utc + timedelta(minutes=offset_min)).astimezone(ET)
+            e["ts"], e["date"] = dt.isoformat(), dt.date().isoformat()
+    return rows
+
+
+def calibrate(ff, nq):
+    """Nasdaq's time column is labelled GMT. Confirm that against events both
+    sources list; if Nasdaq turns out to be in another zone, shift by the gap."""
+    ff_by = {}
+    for e in ff:
+        ff_by.setdefault((e["country"], norm_title(e["title"])), []).append(e)
+    gaps = []
+    for e in nq:
+        if e["_utc"] is None:
+            continue
+        for f in ff_by.get((e["country"], norm_title(e["title"])), []):
+            gap = (datetime.fromisoformat(f["ts"]) - e["_utc"]).total_seconds() / 60
+            if abs(gap) <= 14 * 60:
+                gaps.append(int(round(gap / 30.0)) * 30)
+    if not gaps:
+        return 0
+    best = max(set(gaps), key=gaps.count)
+    log(f"  Nasdaq time offset from {len(gaps)} matched events: {best} min")
+    return best
+
+
+def fetch_economic():
+    today = today_et()
+    ff, nq, errors = None, None, []
+    try:
+        ff = fetch_ff()
+        log(f"  Forex Factory: {len(ff)}")
+    except Exception as e:
+        errors.append(f"Forex Factory: {e}")
+        log(f"  Forex Factory failed: {e}")
+
+    start = today
+    if ff:
+        ff_min = min(date.fromisoformat(e["date"]) for e in ff)
+        start = max(min(today, ff_min), today - timedelta(days=7))  # overlap for calibration
+    try:
+        nq = fetch_nasdaq_econ(start, (today - start).days + EARNINGS_DAYS)
+        log(f"  Nasdaq: {len(nq)}")
+    except Exception as e:
+        errors.append(f"Nasdaq: {e}")
+        log(f"  Nasdaq economic failed: {e}")
+
+    if ff is None and nq is None:
+        raise RuntimeError("; ".join(errors))
+    if ff and nq:
+        nq = finish_nasdaq(nq, calibrate(ff, nq))
+        ff_min = min(e["date"] for e in ff)
+        ff_max = max(e["date"] for e in ff)
+        nq = [e for e in nq if not (ff_min <= e["date"] <= ff_max)]
+        label = "Forex Factory + Nasdaq"
+    elif nq is not None:
+        nq = finish_nasdaq(nq, 0)
+        label = "Nasdaq only (Forex Factory down)"
+    else:
+        label = "Forex Factory only (Nasdaq down)"
+
     seen, out = set(), []
-    for e in events:
-        k = (e["ts"], e["country"], e["title"])
+    for e in (ff or []) + (nq or []):
+        k = (e["date"], e["ts"], e["country"], e["title"])
         if k not in seen:
             seen.add(k)
             out.append(e)
-    return out
+    return out, label
 
 
 # ---------------------------------------------------------------- earnings
