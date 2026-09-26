@@ -65,7 +65,8 @@ h1{font-size:18px;font-weight:600;margin:0;letter-spacing:.01em}
 .chip.ipo[aria-pressed="true"]{color:var(--ipo)}
 select,input[type=search],input[type=text]{background:var(--panel);border:1px solid var(--line);
   border-radius:var(--radius-sm);padding:5px 8px;font-size:13px}
-.export{margin-left:auto;background:var(--panel);border:1px solid var(--faint);border-radius:var(--radius-sm);padding:5px 12px;font-size:13px;cursor:pointer}
+.exports{margin-left:auto;display:flex;gap:8px}
+.export{background:var(--panel);border:1px solid var(--faint);border-radius:var(--radius-sm);padding:5px 12px;font-size:13px;cursor:pointer}
 .export:hover{border-color:var(--ink)}
 label.inline{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--dim)}
 details.wl{font-size:13px;color:var(--dim);margin-bottom:14px}
@@ -132,7 +133,7 @@ footer{margin-top:40px;color:var(--faint);font-size:12px;max-width:80ch}
     </select>
     <input type="search" id="q" placeholder="Search symbol or event" aria-label="Search">
     <label class="inline"><input type="checkbox" id="watchOnly"> Watchlist stocks only</label>
-    <button class="export" id="export">Export CSV</button>
+    <span class="exports"><button class="export" id="export">Export CSV</button><button class="export" id="exportIcs">Add to calendar</button></span>
   </div>
 
   <details class="wl">
@@ -412,12 +413,89 @@ function exportCSV(){
     e.forecast||'', e.previous||'', e.ratio||'', e.price_range||'', e.shares||'', e.deal_size??'', e.exchange||''
   ].map(v=>{ const t=String(v); return /[",\n]/.test(t)?'"'+t.replace(/"/g,'""')+'"':t; }).join(',');
   const csv='\ufeff'+cols.join(',')+'\n'+rows.map(line).join('\n');
+  saveFile(csv,'text/csv;charset=utf-8','csv');
+}
+
+function saveFile(text,mime,ext){
   const a=document.createElement('a');
-  a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
-  a.download=`market-calendar-${todayET()}${S.day?'-day-'+S.day:''}.csv`;
+  a.href=URL.createObjectURL(new Blob([text],{type:mime}));
+  a.download=`market-calendar-${todayET()}${S.day?'-day-'+S.day:''}.${ext}`;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(()=>URL.revokeObjectURL(a.href),1000);
 }
+
+// ---- calendar (.ics) export: works in Google, Outlook, Apple, and any iCalendar app
+function etToUtc(dateStr,h,m){
+  const [y,mo,d]=dateStr.split('-').map(Number);
+  const guess=new Date(Date.UTC(y,mo-1,d,h,m));
+  const p=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:ET,hourCycle:'h23',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})
+    .formatToParts(guess).map(x=>[x.type,x.value]));
+  const asEt=Date.UTC(+p.year,+p.month-1,+p.day,+p.hour,+p.minute);
+  return new Date(guess.getTime()+(guess.getTime()-asEt));
+}
+const icsUtc=d=>d.toISOString().replace(/[-:]/g,'').replace(/\.\d{3}/,'');
+const icsDate=s=>s.replace(/-/g,'');
+const nextDay=s=>{const d=new Date(s+'T12:00:00Z'); d.setUTCDate(d.getUTCDate()+1); return d.toISOString().slice(0,10);};
+const icsText=t=>String(t??'').replace(/\\/g,'\\\\').replace(/;/g,'\\;').replace(/,/g,'\\,').replace(/\r?\n/g,'\\n');
+function fold(line){
+  const out=[]; let cur='';
+  for(const ch of line){ if(new TextEncoder().encode(cur+ch).length>74){ out.push(cur); cur=' '+ch; } else cur+=ch; }
+  out.push(cur); return out.join('\r\n');
+}
+function hashId(s){ let h=5381; for(const c of s) h=((h<<5)+h+c.charCodeAt(0))>>>0; return h.toString(36); }
+
+function icsEvent(e,stamp){
+  let title, desc=[], start=null, mins=15, allDay=false;
+  if(e.type==='econ'){
+    title=`${e.country} ${e.title}`;
+    if(e.forecast) desc.push('Forecast: '+e.forecast);
+    if(e.previous) desc.push('Previous: '+e.previous);
+    desc.push('Impact: '+(e.impact||'n/a')+(e.src==='Nasdaq'?' (estimated)':''));
+    if(e.ts) start=new Date(e.ts); else allDay=true;
+  }else if(e.type==='earnings'){
+    const when={BMO:'before the open',AMC:'after the close',DMH:'during market hours'}[e.session];
+    title=`${e.symbol} earnings${when?' ('+when+')':''}`;
+    if(e.name) desc.push(e.name);
+    if(e.eps_est!=null) desc.push('EPS estimate: '+eps(e.eps_est));
+    if(e.last_year_eps!=null) desc.push('Year-ago EPS: '+eps(e.last_year_eps));
+    if(e.market_cap) desc.push('Market cap: '+money(e.market_cap));
+    desc.push('Time shown is typical for this session; check the company\'s investor relations page for the exact call time.');
+    if(e.session==='BMO') {start=etToUtc(e.date,8,0); mins=60;}
+    else if(e.session==='AMC') {start=etToUtc(e.date,16,30); mins=60;}
+    else allDay=true;
+  }else if(e.type==='split'){
+    title=`${e.symbol} stock split ${e.ratio}`; if(e.name) desc.push(e.name); allDay=true;
+  }else{
+    title=`${e.symbol} IPO prices (trades next morning)`;
+    if(e.name) desc.push(e.name);
+    if(e.price_range) desc.push('Price range: $'+e.price_range.replace(/\$/g,''));
+    if(e.exchange) desc.push('Exchange: '+e.exchange);
+    allDay=true;
+  }
+  const uid=`${e.type}-${e.date}-${hashId((e.symbol||'')+'|'+(e.title||'')+'|'+(e.country||''))}@market-calendar`;
+  const L=['BEGIN:VEVENT','UID:'+uid,'DTSTAMP:'+stamp,'SUMMARY:'+icsText(title)];
+  if(allDay){ L.push('DTSTART;VALUE=DATE:'+icsDate(e.date),'DTEND;VALUE=DATE:'+icsDate(nextDay(e.date)),'TRANSP:TRANSPARENT'); }
+  else{
+    L.push('DTSTART:'+icsUtc(start),'DTEND:'+icsUtc(new Date(start.getTime()+mins*6e4)));
+    L.push('BEGIN:VALARM','ACTION:DISPLAY','DESCRIPTION:'+icsText(title),'TRIGGER:-PT15M','END:VALARM');
+  }
+  if(desc.length) L.push('DESCRIPTION:'+icsText(desc.join('\n')));
+  L.push('END:VEVENT');
+  return L;
+}
+
+function exportICS(){
+  const ws=watchSet();
+  const rows=DATA.events.filter(e=>passes(e,ws));
+  if(!rows.length){ alert('Nothing to add. Loosen the filters first.'); return; }
+  if(rows.length>40 && !confirm(`This adds ${rows.length} events to your calendar. Continue?\n\nTip: pick one day, or set earnings to $10B+, to add fewer.`)) return;
+  const stamp=icsUtc(new Date());
+  const L=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//market-calendar//EN','CALSCALE:GREGORIAN','METHOD:PUBLISH','X-WR-CALNAME:Market calendar'];
+  for(const e of rows) L.push(...icsEvent(e,stamp));
+  L.push('END:VCALENDAR');
+  saveFile(L.map(fold).join('\r\n')+'\r\n','text/calendar;charset=utf-8','ics');
+}
+document.getElementById('exportIcs').addEventListener('click',exportICS);
 document.getElementById('export').addEventListener('click',exportCSV);
 
 loadSettings(); syncControls(); load();
