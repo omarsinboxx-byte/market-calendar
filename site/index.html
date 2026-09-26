@@ -145,7 +145,7 @@ footer{margin-top:40px;color:var(--faint);font-size:12px;max-width:80ch}
 
   <footer>
     Times are US Eastern. Earnings show when the company reports: before the open (BMO) or after the close (AMC);
-    the conference call normally follows within the hour. Economic data from Forex Factory; earnings, splits, and IPOs from Nasdaq.
+    the conference call normally follows within the hour. Economic data from Forex Factory for the current week and Nasdaq for the weeks after (impact levels for those are estimated); earnings, splits, and IPOs from Nasdaq.
     Updated automatically every 3 hours on weekdays.
   </footer>
 </div>
@@ -224,7 +224,7 @@ function renderStatus(){
 function renderHero(){
   const el=document.getElementById('hero');
   const now=Date.now();
-  const next=DATA.events.find(e=>e.type==='econ' && e.impact==='High' && (S.country==='all'||e.country===S.country) && new Date(e.ts)>now);
+  const next=DATA.events.find(e=>e.type==='econ' && e.ts && e.impact==='High' && (S.country==='all'||e.country===S.country) && new Date(e.ts)>now);
   if(!next){
     el.innerHTML=`<div class="label">Next high-impact release</div><div class="what muted">None scheduled in the loaded window${S.country!=='all'?' for '+esc(S.country):''}.</div>`;
     return;
@@ -270,9 +270,9 @@ function renderStrip(ws){
 function econTable(rows,ws){
   const now=Date.now();
   return `<div class="scroll"><table><thead><tr><th>Time</th><th>Event</th><th class="num">Forecast</th><th class="num">Previous</th></tr></thead><tbody>
-  ${rows.map(e=>`<tr class="${new Date(e.ts)<now?'past':''}">
-    <td>${fmtTime.format(new Date(e.ts))}</td>
-    <td class="grow"><span class="imp ${esc(e.impact)}" title="${esc(e.impact)} impact"></span><span class="muted">${esc(e.country)}</span> ${esc(e.title)}</td>
+  ${rows.map(e=>`<tr class="${e.ts&&new Date(e.ts)<now?'past':''}">
+    <td>${e.ts?fmtTime.format(new Date(e.ts)):'All day'}</td>
+    <td class="grow"><span class="imp ${esc(e.impact)}" title="${esc(e.impact)} impact${e.src==='Nasdaq'?' (estimated)':''} · ${esc(e.src||'Forex Factory')}"></span><span class="muted">${esc(e.country)}</span> ${esc(e.title)}</td>
     <td class="num">${esc(e.forecast)}</td><td class="num">${esc(e.previous)}</td></tr>`).join('')}
   </tbody></table></div>`;
 }
