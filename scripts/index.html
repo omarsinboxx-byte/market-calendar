@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Market calendar</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📅</text></svg>">
+<style>
+:root{
+  --bg:#0E1C24; --panel:#132833; --line:#21404E; --ink:#E4ECEE; --dim:#8BA3AD; --faint:#5A7480;
+  --high:#F2A93B; --med:#6FB0D0; --low:#4B6875;
+  --earn:#7CCB93; --split:#C3A2F0; --ipo:#F07F9A; --watch:#F2A93B;
+  --radius-sm:4px; --radius-lg:10px;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+  color-scheme:dark;
+}
+*,*::before,*::after{box-sizing:inherit}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.5 "Inter","Segoe UI",system-ui,-apple-system,sans-serif;
+  font-variant-numeric:tabular-nums}
+.wrap{max-width:1120px;margin:0 auto;padding:20px 20px 60px}
+a{color:var(--med)}
+button,select,input{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--high);outline-offset:2px}
+
+header.top{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+h1{font-size:18px;font-weight:600;margin:0;letter-spacing:.01em}
+.status{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--dim)}
+.status span::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;
+  background:var(--earn);margin-right:6px;vertical-align:1px}
+.status span.stale::before{background:var(--high)}
+
+/* hero: the one loud thing */
+.hero{margin:22px 0 26px;padding:22px 0 24px;border-bottom:1px solid var(--line)}
+.hero .label{color:var(--dim);font-size:14px}
+.hero .count{font-size:clamp(44px,9vw,88px);font-weight:700;line-height:1;letter-spacing:-.03em;
+  margin:6px 0 10px;color:var(--high)}
+.hero .count small{font-size:.4em;font-weight:500;color:var(--dim);letter-spacing:0;margin-left:.15em}
+.hero .what{font-size:20px;font-weight:600}
+.hero .meta{color:var(--dim);font-size:14px;margin-top:2px}
+
+/* week strip */
+.strip{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;margin-bottom:18px}
+.day{flex:0 0 auto;min-width:84px;text-align:left;background:var(--panel);border:1px solid var(--line);
+  border-radius:var(--radius-sm);padding:8px 10px;cursor:pointer}
+.day:hover{border-color:var(--faint)}
+.day[aria-pressed="true"]{border-color:var(--high);background:#1A3340}
+.day .dow{font-size:12px;color:var(--dim)}
+.day .dnum{font-size:18px;font-weight:600;line-height:1.2}
+.day .bars{display:flex;gap:3px;margin-top:6px;height:6px}
+.day .bars i{display:block;width:6px;height:6px;border-radius:1px;background:var(--high)}
+.day .counts{font-size:11px;color:var(--dim);margin-top:4px;white-space:nowrap}
+.day.all{display:flex;align-items:center}
+
+/* controls */
+.controls{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;margin-bottom:8px}
+.chip{border:1px solid var(--line);background:transparent;border-radius:999px;padding:4px 12px;
+  cursor:pointer;font-size:13px;color:var(--dim)}
+.chip[aria-pressed="true"]{color:var(--ink);border-color:currentColor}
+.chip.econ[aria-pressed="true"]{color:var(--high)}
+.chip.earnings[aria-pressed="true"]{color:var(--earn)}
+.chip.split[aria-pressed="true"]{color:var(--split)}
+.chip.ipo[aria-pressed="true"]{color:var(--ipo)}
+select,input[type=search],input[type=text]{background:var(--panel);border:1px solid var(--line);
+  border-radius:var(--radius-sm);padding:5px 8px;font-size:13px}
+.export{margin-left:auto;background:var(--panel);border:1px solid var(--faint);border-radius:var(--radius-sm);padding:5px 12px;font-size:13px;cursor:pointer}
+.export:hover{border-color:var(--ink)}
+label.inline{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--dim)}
+details.wl{font-size:13px;color:var(--dim);margin-bottom:14px}
+details.wl summary{cursor:pointer}
+details.wl input{width:min(420px,100%);margin-top:8px}
+details.wl p{margin:6px 0 0}
+
+/* agenda */
+section.dayblock{margin-top:26px}
+section.dayblock h2{font-size:15px;font-weight:600;margin:0 0 8px;display:flex;gap:10px;align-items:baseline}
+section.dayblock h2 span{color:var(--dim);font-weight:400;font-size:13px}
+h3{font-size:13px;font-weight:600;color:var(--dim);margin:14px 0 4px}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:14px}
+td,th{padding:6px 10px 6px 0;text-align:left;border-bottom:1px solid var(--line);vertical-align:top;white-space:nowrap}
+th{font-weight:500;color:var(--faint);font-size:12px}
+td.grow{white-space:normal;min-width:180px}
+td.num,th.num{text-align:right}
+tr.past{opacity:.45}
+tr.watch td:first-child{box-shadow:inset 3px 0 0 var(--watch);padding-left:8px}
+.imp{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+.imp.High{background:var(--high)} .imp.Medium{background:var(--med)}
+.imp.Low{background:var(--low)} .imp.Holiday{background:transparent;border:1px solid var(--faint)}
+.sym{font-weight:600}
+.sym.e{color:var(--earn)} .sym.s{color:var(--split)} .sym.i{color:var(--ipo)}
+.muted{color:var(--dim)}
+.more{margin-top:6px;background:none;border:0;color:var(--med);cursor:pointer;padding:0;font-size:13px}
+.empty{padding:40px 0;color:var(--dim);max-width:60ch}
+.empty strong{color:var(--ink)}
+footer{margin-top:40px;color:var(--faint);font-size:12px;max-width:80ch}
+
+@media (max-width:600px){.wrap{padding:14px 14px 40px} .hero .what{font-size:17px}}
+@media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>Market calendar</h1>
+    <div class="status" id="status"></div>
+  </header>
+
+  <div class="hero" id="hero"></div>
+
+  <nav class="strip" id="strip" aria-label="Pick a day"></nav>
+
+  <div class="controls" id="controls">
+    <button class="chip econ" data-type="econ" aria-pressed="true">Economic</button>
+    <button class="chip earnings" data-type="earnings" aria-pressed="true">Earnings</button>
+    <button class="chip split" data-type="split" aria-pressed="true">Splits</button>
+    <button class="chip ipo" data-type="ipo" aria-pressed="true">IPOs</button>
+    <select id="impact" aria-label="Economic impact">
+      <option value="high">High impact</option>
+      <option value="high-med">High + medium</option>
+      <option value="all">All impact levels</option>
+    </select>
+    <select id="country" aria-label="Currency / country"></select>
+    <select id="mcap" aria-label="Minimum market cap">
+      <option value="0">Any market cap</option>
+      <option value="300000000">$300M+</option>
+      <option value="2000000000">$2B+</option>
+      <option value="10000000000">$10B+</option>
+      <option value="50000000000">$50B+</option>
+    </select>
+    <input type="search" id="q" placeholder="Search symbol or event" aria-label="Search">
+    <label class="inline"><input type="checkbox" id="watchOnly"> Watchlist stocks only</label>
+    <button class="export" id="export">Export CSV</button>
+  </div>
+
+  <details class="wl">
+    <summary>Watchlist</summary>
+    <input type="text" id="watchlist" placeholder="AAPL, NVDA, TSLA" aria-label="Watchlist symbols">
+    <p>Stored only in this browser. Watchlist names always show, regardless of the market-cap filter.</p>
+  </details>
+
+  <main id="agenda"></main>
+
+  <footer>
+    Times are US Eastern. Earnings show when the company reports: before the open (BMO) or after the close (AMC);
+    the conference call normally follows within the hour. Economic data from Forex Factory; earnings, splits, and IPOs from Nasdaq.
+    Updated automatically every 3 hours on weekdays.
+  </footer>
+</div>
+
+<script>
+const ET = 'America/New_York';
+const LS_KEY = 'mc-settings-v1';
+const DAY_LIMIT = 60;
+const fmtTime = new Intl.DateTimeFormat('en-US',{timeZone:ET,hour:'numeric',minute:'2-digit'});
+const fmtTimeFull = new Intl.DateTimeFormat('en-US',{timeZone:ET,weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+const dayName = (d,opt) => new Intl.DateTimeFormat('en-US',{timeZone:'UTC',...opt}).format(new Date(d+'T12:00:00Z'));
+const todayET = () => new Intl.DateTimeFormat('en-CA',{timeZone:ET}).format(new Date());
+const esc = s => String(s ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+let DATA = {events:[],sources:{}};
+let expanded = new Set();
+const S = {types:['econ','earnings','split','ipo'], impact:'high-med', country:'USD', mcap:2e9, q:'', watchOnly:false, day:null, watchlist:''};
+
+function loadSettings(){
+  try{ Object.assign(S, JSON.parse(localStorage.getItem(LS_KEY)||'{}')); }catch(e){}
+  if(!S.hasIpo){ if(!S.types.includes('ipo')) S.types.push('ipo'); S.hasIpo=true; }
+  S.day = null;
+}
+function saveSettings(){
+  try{ const {day,q,...rest}=S; localStorage.setItem(LS_KEY, JSON.stringify(rest)); }catch(e){}
+}
+const watchSet = () => new Set(S.watchlist.toUpperCase().split(/[\s,;]+/).filter(Boolean));
+
+function money(n){
+  if(n==null) return '';
+  const a=Math.abs(n);
+  if(a>=1e12) return '$'+(n/1e12).toFixed(2)+'T';
+  if(a>=1e9) return '$'+(n/1e9).toFixed(1)+'B';
+  if(a>=1e6) return '$'+(n/1e6).toFixed(0)+'M';
+  return '$'+n.toLocaleString();
+}
+const eps = n => n==null ? '' : (n<0?'−$'+Math.abs(n).toFixed(2):'$'+n.toFixed(2));
+function ago(iso){
+  if(!iso) return 'never';
+  const m=Math.round((Date.now()-new Date(iso))/60000);
+  if(m<1) return 'just now'; if(m<60) return m+' min ago';
+  const h=Math.round(m/60); if(h<48) return h+' h ago';
+  return Math.round(h/24)+' days ago';
+}
+
+function passes(e, ws, ignoreDay){
+  if(!S.types.includes(e.type)) return false;
+  if(!ignoreDay && S.day && e.date!==S.day) return false;
+  const q=S.q.trim().toLowerCase();
+  if(e.type==='econ'){
+    if(S.impact==='high' && e.impact!=='High') return false;
+    if(S.impact==='high-med' && !['High','Medium'].includes(e.impact)) return false;
+    if(S.country!=='all' && e.country!==S.country) return false;
+    if(q && !(e.title+' '+e.country).toLowerCase().includes(q)) return false;
+    return true;
+  }
+  if(e.type==='ipo'){ return !q || (e.symbol+' '+e.name).toLowerCase().includes(q); }
+  const inWatch = ws.has(e.symbol);
+  if(S.watchOnly && !inWatch) return false;
+  if(e.type==='earnings' && !inWatch && S.mcap>0 && (e.market_cap==null || e.market_cap<S.mcap)) return false;
+  if(q && !(e.symbol+' '+e.name).toLowerCase().includes(q)) return false;
+  return true;
+}
+
+function renderStatus(){
+  const labels={economic:'Economic',earnings:'Earnings',splits:'Splits',ipos:'IPOs'};
+  const el=document.getElementById('status');
+  if(!DATA.generated_at){ el.textContent='Waiting for first update'; return; }
+  el.innerHTML=Object.entries(labels).map(([k,l])=>{
+    const s=DATA.sources[k]||{};
+    const title=s.ok?`${s.source}: ${s.count} events`:`Last fetch failed: ${s.error||'unknown'}`;
+    return `<span class="${s.ok?'':'stale'}" title="${esc(title)}">${l} ${s.ok?ago(s.updated_at):'stale · '+ago(s.updated_at)}</span>`;
+  }).join('');
+}
+
+function renderHero(){
+  const el=document.getElementById('hero');
+  const now=Date.now();
+  const next=DATA.events.find(e=>e.type==='econ' && e.impact==='High' && (S.country==='all'||e.country===S.country) && new Date(e.ts)>now);
+  if(!next){
+    el.innerHTML=`<div class="label">Next high-impact release</div><div class="what muted">None scheduled in the loaded window${S.country!=='all'?' for '+esc(S.country):''}.</div>`;
+    return;
+  }
+  let ms=new Date(next.ts)-now;
+  const d=Math.floor(ms/864e5); ms%=864e5;
+  const h=Math.floor(ms/36e5); ms%=36e5;
+  const m=Math.floor(ms/6e4); const s=Math.floor(ms%6e4/1e3);
+  const pad=n=>String(n).padStart(2,'0');
+  const count = d>0 ? `${d}<small>d</small> ${h}<small>h</small> ${pad(m)}<small>m</small>`
+                    : `${h}<small>h</small> ${pad(m)}<small>m</small> ${pad(s)}<small>s</small>`;
+  el.innerHTML=`<div class="label">Next high-impact release</div>
+    <div class="count" aria-live="off">${count}</div>
+    <div class="what">${esc(next.country)} ${esc(next.title)}</div>
+    <div class="meta">${fmtTimeFull.format(new Date(next.ts))} ET${next.forecast?` · forecast ${esc(next.forecast)}`:''}${next.previous?` · previous ${esc(next.previous)}`:''}</div>`;
+}
+
+function renderStrip(ws){
+  const el=document.getElementById('strip');
+  const days=new Map();
+  for(const e of DATA.events){
+    if(!passes(e,ws,true)) continue;
+    const c=days.get(e.date)||{high:0,econ:0,earn:0,split:0,ipo:0};
+    if(e.type==='econ'){c.econ++; if(e.impact==='High') c.high++;}
+    else if(e.type==='earnings') c.earn++; else if(e.type==='ipo') c.ipo++; else c.split++;
+    days.set(e.date,c);
+  }
+  const today=todayET();
+  const list=[...days.keys()].sort().filter(d=>d>=today).slice(0,21);
+  let html=`<button class="day all" aria-pressed="${!S.day}" data-day="">All days</button>`;
+  for(const d of list){
+    const c=days.get(d);
+    const parts=[]; if(c.econ) parts.push(c.econ+' econ'); if(c.earn) parts.push(c.earn+' earn'); if(c.split) parts.push(c.split+' split'); if(c.ipo) parts.push(c.ipo+' IPO');
+    html+=`<button class="day" aria-pressed="${S.day===d}" data-day="${d}">
+      <div class="dow">${d===today?'Today':dayName(d,{weekday:'short'})}</div>
+      <div class="dnum">${dayName(d,{month:'short',day:'numeric'})}</div>
+      <div class="bars" aria-label="${c.high} high-impact releases">${'<i></i>'.repeat(Math.min(c.high,8))}</div>
+      <div class="counts">${parts.join(' · ')}</div></button>`;
+  }
+  el.innerHTML=html;
+}
+
+function econTable(rows,ws){
+  const now=Date.now();
+  return `<div class="scroll"><table><thead><tr><th>Time</th><th>Event</th><th class="num">Forecast</th><th class="num">Previous</th></tr></thead><tbody>
+  ${rows.map(e=>`<tr class="${new Date(e.ts)<now?'past':''}">
+    <td>${fmtTime.format(new Date(e.ts))}</td>
+    <td class="grow"><span class="imp ${esc(e.impact)}" title="${esc(e.impact)} impact"></span><span class="muted">${esc(e.country)}</span> ${esc(e.title)}</td>
+    <td class="num">${esc(e.forecast)}</td><td class="num">${esc(e.previous)}</td></tr>`).join('')}
+  </tbody></table></div>`;
+}
+
+function earnTable(rows,ws){
+  return `<div class="scroll"><table><thead><tr><th>Symbol</th><th>Company</th><th class="num">EPS est.</th><th class="num">Year ago</th><th class="num">Ests</th><th class="num">Mkt cap</th><th>Quarter</th></tr></thead><tbody>
+  ${rows.map(e=>`<tr class="${ws.has(e.symbol)?'watch':''}">
+    <td class="sym e">${esc(e.symbol)}</td><td class="grow">${esc(e.name)}</td>
+    <td class="num">${e.eps_est!=null?eps(e.eps_est):(e.rev_est?money(e.rev_est)+' rev':'')}</td>
+    <td class="num muted">${eps(e.last_year_eps)}</td><td class="num muted">${e.num_est??''}</td>
+    <td class="num">${money(e.market_cap)}</td><td class="muted">${esc(e.fiscal_q)}</td></tr>`).join('')}
+  </tbody></table></div>`;
+}
+
+function splitTable(rows,ws){
+  return `<div class="scroll"><table><thead><tr><th>Symbol</th><th>Company</th><th>Ratio</th><th>Announced</th></tr></thead><tbody>
+  ${rows.map(e=>`<tr class="${ws.has(e.symbol)?'watch':''}">
+    <td class="sym s">${esc(e.symbol)}</td><td class="grow">${esc(e.name)}</td><td>${esc(e.ratio)}</td>
+    <td class="muted">${e.announced?dayName(e.announced,{month:'short',day:'numeric'}):''}</td></tr>`).join('')}
+  </tbody></table></div>`;
+}
+
+function ipoTable(rows){
+  return `<div class="scroll"><table><thead><tr><th>Symbol</th><th>Company</th><th>Exchange</th><th class="num">Price range</th><th class="num">Shares</th><th class="num">Deal size</th></tr></thead><tbody>
+  ${rows.map(e=>`<tr>
+    <td class="sym i">${esc(e.symbol)}</td><td class="grow">${esc(e.name)}</td><td class="muted">${esc(e.exchange)}</td>
+    <td class="num">${e.price_range?'$'+esc(e.price_range.replace(/\$/g,'')):''}</td>
+    <td class="num muted">${esc(e.shares)}</td><td class="num">${money(e.deal_size)}</td></tr>`).join('')}
+  </tbody></table></div>`;
+}
+
+const SESS=[['BMO','Before the open'],['AMC','After the close'],['DMH','During market hours'],['TNS','Time not announced']];
+
+function renderAgenda(ws){
+  const el=document.getElementById('agenda');
+  if(!DATA.generated_at){
+    el.innerHTML=`<div class="empty"><strong>No data yet.</strong> Run the “Update calendar” workflow once from the Actions tab; the page fills in about two minutes later.</div>`;
+    return;
+  }
+  const byDay=new Map();
+  for(const e of DATA.events){ if(passes(e,ws)){ (byDay.get(e.date)||byDay.set(e.date,[]).get(e.date)).push(e); } }
+  if(!byDay.size){
+    el.innerHTML=`<div class="empty"><strong>Nothing matches these filters.</strong> Widen the impact level, set market cap to “Any”, or clear the search.</div>`;
+    return;
+  }
+  const today=todayET(), tmr=new Date(Date.now()+864e5); const tomorrow=new Intl.DateTimeFormat('en-CA',{timeZone:ET}).format(tmr);
+  let html='';
+  for(const [d,evs] of [...byDay.entries()].sort()){
+    const rel=d===today?'Today':d===tomorrow?'Tomorrow':'';
+    html+=`<section class="dayblock"><h2>${dayName(d,{weekday:'long',month:'long',day:'numeric'})}${rel?`<span>${rel}</span>`:''}</h2>`;
+    const econ=evs.filter(e=>e.type==='econ');
+    if(econ.length) html+=`<h3>Economic releases</h3>`+econTable(econ,ws);
+    const earn=evs.filter(e=>e.type==='earnings');
+    for(const [code,label] of SESS){
+      let rows=earn.filter(e=>e.session===code);
+      if(!rows.length) continue;
+      rows.sort((a,b)=>(ws.has(b.symbol)-ws.has(a.symbol))||((b.market_cap||0)-(a.market_cap||0)));
+      const key=d+code, total=rows.length;
+      if(!expanded.has(key)) rows=rows.slice(0,DAY_LIMIT);
+      html+=`<h3>Earnings · ${label} (${total})</h3>`+earnTable(rows,ws);
+      if(total>rows.length) html+=`<button class="more" data-expand="${key}">Show all ${total}</button>`;
+    }
+    const sp=evs.filter(e=>e.type==='split');
+    if(sp.length) html+=`<h3>Stock splits</h3>`+splitTable(sp,ws);
+    const ipo=evs.filter(e=>e.type==='ipo');
+    if(ipo.length) html+=`<h3>IPOs expected to price (usually trade the next morning)</h3>`+ipoTable(ipo);
+    html+=`</section>`;
+  }
+  el.innerHTML=html;
+}
+
+function populateCountries(){
+  const sel=document.getElementById('country');
+  const cs=[...new Set(DATA.events.filter(e=>e.type==='econ').map(e=>e.country))].filter(Boolean).sort();
+  if(!cs.includes(S.country) && S.country!=='all') cs.unshift(S.country);
+  sel.innerHTML=`<option value="all">All countries</option>`+cs.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  sel.value=S.country;
+}
+
+function render(){
+  const ws=watchSet();
+  renderStatus(); renderHero(); renderStrip(ws); renderAgenda(ws);
+}
+
+function syncControls(){
+  document.querySelectorAll('.chip').forEach(b=>b.setAttribute('aria-pressed',S.types.includes(b.dataset.type)));
+  document.getElementById('impact').value=S.impact;
+  document.getElementById('mcap').value=String(S.mcap);
+  document.getElementById('watchOnly').checked=S.watchOnly;
+  document.getElementById('watchlist').value=S.watchlist;
+}
+
+async function load(){
+  try{
+    const r=await fetch('data/calendar.json?t='+Date.now(),{cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    DATA=await r.json();
+    populateCountries(); render();
+  }catch(err){
+    document.getElementById('agenda').innerHTML=`<div class="empty"><strong>Couldn't load data/calendar.json (${esc(err.message)}).</strong>
+      If you opened this file straight from your disk, browsers block that. Open the GitHub Pages URL instead,
+      or run <code>python -m http.server</code> inside the <code>site</code> folder and visit localhost:8000.</div>`;
+  }
+}
+
+document.getElementById('controls').addEventListener('click',e=>{
+  const b=e.target.closest('.chip'); if(!b) return;
+  const t=b.dataset.type;
+  S.types=S.types.includes(t)?S.types.filter(x=>x!==t):[...S.types,t];
+  syncControls(); saveSettings(); render();
+});
+document.getElementById('strip').addEventListener('click',e=>{
+  const b=e.target.closest('.day'); if(!b) return;
+  S.day=b.dataset.day||null; render();
+});
+document.getElementById('agenda').addEventListener('click',e=>{
+  const b=e.target.closest('[data-expand]'); if(!b) return;
+  expanded.add(b.dataset.expand); render();
+});
+for(const [id,key,cast] of [['impact','impact',String],['country','country',String],['mcap','mcap',Number]]){
+  document.getElementById(id).addEventListener('change',e=>{S[key]=cast(e.target.value); saveSettings(); render();});
+}
+document.getElementById('q').addEventListener('input',e=>{S.q=e.target.value; render();});
+document.getElementById('watchOnly').addEventListener('change',e=>{S.watchOnly=e.target.checked; saveSettings(); render();});
+document.getElementById('watchlist').addEventListener('change',e=>{S.watchlist=e.target.value.toUpperCase(); e.target.value=S.watchlist; saveSettings(); render();});
+
+function exportCSV(){
+  const ws=watchSet();
+  const rows=DATA.events.filter(e=>passes(e,ws));
+  if(!rows.length){ alert('Nothing to export. Loosen the filters first.'); return; }
+  const cols=['date','time_et','type','symbol','name','country','impact','session','eps_est','last_year_eps','num_estimates','market_cap','fiscal_quarter','forecast','previous','split_ratio','ipo_price_range','ipo_shares','ipo_deal_size','exchange'];
+  const typeName={econ:'Economic',earnings:'Earnings',split:'Split',ipo:'IPO'};
+  const line=e=>[
+    e.date, e.ts?fmtTime.format(new Date(e.ts)):'', typeName[e.type]||e.type,
+    e.symbol||'', e.type==='econ'?e.title:(e.name||''), e.country||'', e.impact||'',
+    e.session||'', e.eps_est??'', e.last_year_eps??'', e.num_est??'', e.market_cap??'', e.fiscal_q||'',
+    e.forecast||'', e.previous||'', e.ratio||'', e.price_range||'', e.shares||'', e.deal_size??'', e.exchange||''
+  ].map(v=>{ const t=String(v); return /[",\n]/.test(t)?'"'+t.replace(/"/g,'""')+'"':t; }).join(',');
+  const csv='\ufeff'+cols.join(',')+'\n'+rows.map(line).join('\n');
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+  a.download=`market-calendar-${todayET()}${S.day?'-day-'+S.day:''}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+document.getElementById('export').addEventListener('click',exportCSV);
+
+loadSettings(); syncControls(); load();
+setInterval(renderHero,1000);
+setInterval(load,15*60*1000);
+setInterval(renderStatus,60*1000);
+</script>
+</body>
+</html>
