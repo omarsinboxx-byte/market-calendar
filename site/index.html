@@ -9,7 +9,7 @@
 :root{
   --bg:#0E1C24; --panel:#132833; --line:#21404E; --ink:#E4ECEE; --dim:#8BA3AD; --faint:#5A7480;
   --high:#F2A93B; --med:#6FB0D0; --low:#4B6875;
-  --earn:#7CCB93; --split:#C3A2F0; --watch:#F2A93B;
+  --earn:#7CCB93; --split:#C3A2F0; --ipo:#F07F9A; --watch:#F2A93B;
   --radius-sm:4px; --radius-lg:10px;
   box-sizing:border-box;
   padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
@@ -62,8 +62,11 @@ h1{font-size:18px;font-weight:600;margin:0;letter-spacing:.01em}
 .chip.econ[aria-pressed="true"]{color:var(--high)}
 .chip.earnings[aria-pressed="true"]{color:var(--earn)}
 .chip.split[aria-pressed="true"]{color:var(--split)}
+.chip.ipo[aria-pressed="true"]{color:var(--ipo)}
 select,input[type=search],input[type=text]{background:var(--panel);border:1px solid var(--line);
   border-radius:var(--radius-sm);padding:5px 8px;font-size:13px}
+.export{margin-left:auto;background:var(--panel);border:1px solid var(--faint);border-radius:var(--radius-sm);padding:5px 12px;font-size:13px;cursor:pointer}
+.export:hover{border-color:var(--ink)}
 label.inline{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--dim)}
 details.wl{font-size:13px;color:var(--dim);margin-bottom:14px}
 details.wl summary{cursor:pointer}
@@ -87,7 +90,7 @@ tr.watch td:first-child{box-shadow:inset 3px 0 0 var(--watch);padding-left:8px}
 .imp.High{background:var(--high)} .imp.Medium{background:var(--med)}
 .imp.Low{background:var(--low)} .imp.Holiday{background:transparent;border:1px solid var(--faint)}
 .sym{font-weight:600}
-.sym.e{color:var(--earn)} .sym.s{color:var(--split)}
+.sym.e{color:var(--earn)} .sym.s{color:var(--split)} .sym.i{color:var(--ipo)}
 .muted{color:var(--dim)}
 .more{margin-top:6px;background:none;border:0;color:var(--med);cursor:pointer;padding:0;font-size:13px}
 .empty{padding:40px 0;color:var(--dim);max-width:60ch}
@@ -113,6 +116,7 @@ footer{margin-top:40px;color:var(--faint);font-size:12px;max-width:80ch}
     <button class="chip econ" data-type="econ" aria-pressed="true">Economic</button>
     <button class="chip earnings" data-type="earnings" aria-pressed="true">Earnings</button>
     <button class="chip split" data-type="split" aria-pressed="true">Splits</button>
+    <button class="chip ipo" data-type="ipo" aria-pressed="true">IPOs</button>
     <select id="impact" aria-label="Economic impact">
       <option value="high">High impact</option>
       <option value="high-med">High + medium</option>
@@ -128,6 +132,7 @@ footer{margin-top:40px;color:var(--faint);font-size:12px;max-width:80ch}
     </select>
     <input type="search" id="q" placeholder="Search symbol or event" aria-label="Search">
     <label class="inline"><input type="checkbox" id="watchOnly"> Watchlist stocks only</label>
+    <button class="export" id="export">Export CSV</button>
   </div>
 
   <details class="wl">
@@ -140,7 +145,7 @@ footer{margin-top:40px;color:var(--faint);font-size:12px;max-width:80ch}
 
   <footer>
     Times are US Eastern. Earnings show when the company reports: before the open (BMO) or after the close (AMC);
-    the conference call normally follows within the hour. Economic data from Forex Factory; earnings and splits from Nasdaq.
+    the conference call normally follows within the hour. Economic data from Forex Factory; earnings, splits, and IPOs from Nasdaq.
     Updated automatically every 3 hours on weekdays.
   </footer>
 </div>
@@ -157,10 +162,11 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;',
 
 let DATA = {events:[],sources:{}};
 let expanded = new Set();
-const S = {types:['econ','earnings','split'], impact:'high-med', country:'USD', mcap:2e9, q:'', watchOnly:false, day:null, watchlist:''};
+const S = {types:['econ','earnings','split','ipo'], impact:'high-med', country:'USD', mcap:2e9, q:'', watchOnly:false, day:null, watchlist:''};
 
 function loadSettings(){
   try{ Object.assign(S, JSON.parse(localStorage.getItem(LS_KEY)||'{}')); }catch(e){}
+  if(!S.hasIpo){ if(!S.types.includes('ipo')) S.types.push('ipo'); S.hasIpo=true; }
   S.day = null;
 }
 function saveSettings(){
@@ -196,6 +202,7 @@ function passes(e, ws, ignoreDay){
     if(q && !(e.title+' '+e.country).toLowerCase().includes(q)) return false;
     return true;
   }
+  if(e.type==='ipo'){ return !q || (e.symbol+' '+e.name).toLowerCase().includes(q); }
   const inWatch = ws.has(e.symbol);
   if(S.watchOnly && !inWatch) return false;
   if(e.type==='earnings' && !inWatch && S.mcap>0 && (e.market_cap==null || e.market_cap<S.mcap)) return false;
@@ -204,7 +211,7 @@ function passes(e, ws, ignoreDay){
 }
 
 function renderStatus(){
-  const labels={economic:'Economic',earnings:'Earnings',splits:'Splits'};
+  const labels={economic:'Economic',earnings:'Earnings',splits:'Splits',ipos:'IPOs'};
   const el=document.getElementById('status');
   if(!DATA.generated_at){ el.textContent='Waiting for first update'; return; }
   el.innerHTML=Object.entries(labels).map(([k,l])=>{
@@ -240,9 +247,9 @@ function renderStrip(ws){
   const days=new Map();
   for(const e of DATA.events){
     if(!passes(e,ws,true)) continue;
-    const c=days.get(e.date)||{high:0,econ:0,earn:0,split:0};
+    const c=days.get(e.date)||{high:0,econ:0,earn:0,split:0,ipo:0};
     if(e.type==='econ'){c.econ++; if(e.impact==='High') c.high++;}
-    else if(e.type==='earnings') c.earn++; else c.split++;
+    else if(e.type==='earnings') c.earn++; else if(e.type==='ipo') c.ipo++; else c.split++;
     days.set(e.date,c);
   }
   const today=todayET();
@@ -250,7 +257,7 @@ function renderStrip(ws){
   let html=`<button class="day all" aria-pressed="${!S.day}" data-day="">All days</button>`;
   for(const d of list){
     const c=days.get(d);
-    const parts=[]; if(c.econ) parts.push(c.econ+' econ'); if(c.earn) parts.push(c.earn+' earn'); if(c.split) parts.push(c.split+' split');
+    const parts=[]; if(c.econ) parts.push(c.econ+' econ'); if(c.earn) parts.push(c.earn+' earn'); if(c.split) parts.push(c.split+' split'); if(c.ipo) parts.push(c.ipo+' IPO');
     html+=`<button class="day" aria-pressed="${S.day===d}" data-day="${d}">
       <div class="dow">${d===today?'Today':dayName(d,{weekday:'short'})}</div>
       <div class="dnum">${dayName(d,{month:'short',day:'numeric'})}</div>
@@ -288,6 +295,15 @@ function splitTable(rows,ws){
   </tbody></table></div>`;
 }
 
+function ipoTable(rows){
+  return `<div class="scroll"><table><thead><tr><th>Symbol</th><th>Company</th><th>Exchange</th><th class="num">Price range</th><th class="num">Shares</th><th class="num">Deal size</th></tr></thead><tbody>
+  ${rows.map(e=>`<tr>
+    <td class="sym i">${esc(e.symbol)}</td><td class="grow">${esc(e.name)}</td><td class="muted">${esc(e.exchange)}</td>
+    <td class="num">${e.price_range?'$'+esc(e.price_range.replace(/\$/g,'')):''}</td>
+    <td class="num muted">${esc(e.shares)}</td><td class="num">${money(e.deal_size)}</td></tr>`).join('')}
+  </tbody></table></div>`;
+}
+
 const SESS=[['BMO','Before the open'],['AMC','After the close'],['DMH','During market hours'],['TNS','Time not announced']];
 
 function renderAgenda(ws){
@@ -321,6 +337,8 @@ function renderAgenda(ws){
     }
     const sp=evs.filter(e=>e.type==='split');
     if(sp.length) html+=`<h3>Stock splits</h3>`+splitTable(sp,ws);
+    const ipo=evs.filter(e=>e.type==='ipo');
+    if(ipo.length) html+=`<h3>IPOs expected to price (usually trade the next morning)</h3>`+ipoTable(ipo);
     html+=`</section>`;
   }
   el.innerHTML=html;
@@ -380,6 +398,27 @@ for(const [id,key,cast] of [['impact','impact',String],['country','country',Stri
 document.getElementById('q').addEventListener('input',e=>{S.q=e.target.value; render();});
 document.getElementById('watchOnly').addEventListener('change',e=>{S.watchOnly=e.target.checked; saveSettings(); render();});
 document.getElementById('watchlist').addEventListener('change',e=>{S.watchlist=e.target.value.toUpperCase(); e.target.value=S.watchlist; saveSettings(); render();});
+
+function exportCSV(){
+  const ws=watchSet();
+  const rows=DATA.events.filter(e=>passes(e,ws));
+  if(!rows.length){ alert('Nothing to export. Loosen the filters first.'); return; }
+  const cols=['date','time_et','type','symbol','name','country','impact','session','eps_est','last_year_eps','num_estimates','market_cap','fiscal_quarter','forecast','previous','split_ratio','ipo_price_range','ipo_shares','ipo_deal_size','exchange'];
+  const typeName={econ:'Economic',earnings:'Earnings',split:'Split',ipo:'IPO'};
+  const line=e=>[
+    e.date, e.ts?fmtTime.format(new Date(e.ts)):'', typeName[e.type]||e.type,
+    e.symbol||'', e.type==='econ'?e.title:(e.name||''), e.country||'', e.impact||'',
+    e.session||'', e.eps_est??'', e.last_year_eps??'', e.num_est??'', e.market_cap??'', e.fiscal_q||'',
+    e.forecast||'', e.previous||'', e.ratio||'', e.price_range||'', e.shares||'', e.deal_size??'', e.exchange||''
+  ].map(v=>{ const t=String(v); return /[",\n]/.test(t)?'"'+t.replace(/"/g,'""')+'"':t; }).join(',');
+  const csv='\ufeff'+cols.join(',')+'\n'+rows.map(line).join('\n');
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+  a.download=`market-calendar-${todayET()}${S.day?'-day-'+S.day:''}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+document.getElementById('export').addEventListener('click',exportCSV);
 
 loadSettings(); syncControls(); load();
 setInterval(renderHero,1000);
