@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch upcoming economic releases, earnings, and stock splits into site/data/calendar.json.
+"""Fetch upcoming economic releases, earnings, stock splits, and IPOs into site/data/calendar.json.
 
 Standard library only — no pip installs. Run locally with:  python scripts/fetch_data.py
 
@@ -7,6 +7,7 @@ Sources (no API key needed):
   - Economic calendar: Forex Factory weekly JSON feed (this week + next week)
   - Earnings + call timing (before open / after close): Nasdaq public calendar API
   - Stock splits: Nasdaq public calendar API
+  - Upcoming IPOs: Nasdaq public calendar API
 Optional fallback for earnings: Finnhub (set FINNHUB_API_KEY as a repo secret).
 
 If a source fails, the previous data for that section is kept and marked stale,
@@ -236,11 +237,51 @@ def fetch_splits():
     return out
 
 
+# ---------------------------------------------------------------- IPOs
+def fetch_ipos():
+    """Upcoming IPOs for this month and next. Date = expected pricing date;
+    shares usually start trading the next morning."""
+    t = today_et()
+    nxt = (t.replace(day=1) + timedelta(days=32)).replace(day=1)
+    out, seen, ok = [], set(), 0
+    for m in (t, nxt):
+        url = f"https://api.nasdaq.com/api/calendar/ipos?date={m.strftime('%Y-%m')}"
+        try:
+            j = get_json(url, headers=NASDAQ_HEADERS)
+        except Exception as e:
+            log(f"  ipos {m:%Y-%m}: {e}")
+            continue
+        ok += 1
+        data = (j or {}).get("data") or {}
+        rows = ((data.get("upcoming") or {}).get("upcomingTable") or {}).get("rows") or []
+        for r in rows:
+            d = mdy(r.get("expectedPriceDate"))
+            sym = (r.get("proposedTickerSymbol") or "").strip().upper()
+            if not d or not sym or (sym, d) in seen:
+                continue
+            seen.add((sym, d))
+            out.append({
+                "type": "ipo",
+                "date": d,
+                "symbol": sym,
+                "name": (r.get("companyName") or "").strip(),
+                "exchange": (r.get("proposedExchange") or "").strip(),
+                "price_range": (r.get("proposedSharePrice") or "").strip(),
+                "shares": (r.get("sharesOffered") or "").strip(),
+                "deal_size": money(r.get("dollarValueOfSharesOffered")),
+            })
+        time.sleep(1)
+    if ok == 0:
+        raise RuntimeError("Nasdaq IPO endpoint unreachable")
+    return out
+
+
 # ---------------------------------------------------------------- main
 SECTIONS = [
     ("economic", "econ", fetch_economic, "Forex Factory"),
     ("earnings", "earnings", fetch_earnings, "Nasdaq"),
     ("splits", "split", fetch_splits, "Nasdaq"),
+    ("ipos", "ipo", fetch_ipos, "Nasdaq"),
 ]
 
 
